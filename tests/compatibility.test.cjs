@@ -123,3 +123,45 @@ test('single video replays after waiting, with working stop control', () => {
     Object.defineProperty(v, 'ended', { configurable: true, value: false });
     h.api.next(); assert.equal(v.currentTime, 0); h.stop(); assert.equal(h.api.running, false); h.close();
 });
+
+function xtPlayer(h, video) {
+    const wrap = h.doc.createElement('xt-wrap'); wrap.className = 'xt_video_player_wrap';
+    h.doc.body.append(wrap); wrap.append(video);
+    wrap.insertAdjacentHTML('beforeend', '<xt-volumebutton class="xt_video_player_volume"><xt-icon class="xt_video_player_common_icon"></xt-icon></xt-volumebutton>');
+    const icon = wrap.querySelector('xt-icon');
+    let isMuted = false, clicks = 0;
+    icon.onclick = () => { clicks++; isMuted = !isMuted; icon.classList.toggle('xt_video_player_common_icon_muted', isMuted); };
+    return {
+        icon, get clicks() { return clicks; },
+        // Model the public player's timeupdate.volume recovery logic.
+        recoverVolume() {
+            if (video.muted || video.defaultMuted) {
+                video.muted = false; video.defaultMuted = false;
+                if (!isMuted) video.volume = 1;
+            } else if (!isMuted) video.volume = 1;
+        }
+    };
+}
+test('XtPlayer stays silent after its native-muted reset; repeated checks do not toggle sound on', () => {
+    const h = harness(unit(1)); const v = h.video(); const player = xtPlayer(h, v);
+    h.start(); assert.equal(v.volume, 0); assert.equal(player.clicks, 1);
+    v.muted = true; player.recoverVolume(); h.advance(6000); player.recoverVolume();
+    assert.equal(v.muted, false); assert.equal(v.volume, 0); assert.equal(player.clicks, 1);
+    h.close();
+});
+test('settings apply immediately, before first five-second progress check and before metadata', () => {
+    const h = harness(unit(1)); const v = h.video(); Object.defineProperty(v, 'readyState', { value: 0, configurable: true });
+    h.start(); assert.equal(v.muted, true); assert.equal(v.volume, 0); assert.equal(v.playbackRate, 2); h.close();
+});
+test('replacement video is silenced on metadata, and stopped automation leaves controls alone', () => {
+    const h = harness(unit(1)); h.start(); const v = h.video(); const player = xtPlayer(h, v);
+    v.dispatchEvent(new h.w.Event('loadedmetadata'));
+    assert.equal(v.volume, 0); assert.equal(player.clicks, 1);
+    h.stop(); player.icon.click(); v.volume = 0.8; h.advance(2000);
+    assert.equal(v.volume, 0.8); assert.equal(player.clicks, 2); h.close();
+});
+test('new XtPlayer is silenced while the progress-refresh timer is pending', () => {
+    const h = harness(unit(1) + unit(2)); const old = h.video({ ended: true });
+    h.start(); h.api.next(); old.remove(); const v = h.video(); const player = xtPlayer(h, v);
+    h.advance(500); assert.equal(v.volume, 0); assert.equal(player.clicks, 1); h.close();
+});

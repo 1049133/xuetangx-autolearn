@@ -1,6 +1,6 @@
 {
   "name": "xuetangx-js-compatibility",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "private": true,
   "scripts": {
     "test": "node --test tests/compatibility.test.cjs",

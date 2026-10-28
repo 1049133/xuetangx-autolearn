@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学堂在线视频自动学习面板脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.0
+// @version      1.7.1
 // @license      MIT
 // @description  为学堂在线(xuetangx.com/learn/)提供一个操作面板，只播放左侧“饼图未满”的章节；自动 2.0 倍速、静音、循环播放，兼容新版知识点目录及旧版章节目录。
 // @author       Yangkunlong + ChatGPT
@@ -92,6 +92,30 @@
             videos.find(function(v) { return v.getClientRects().length; });
     }
 
+    function ensureMuted(video) {
+        // XtPlayer 的 timeupdate.volume 定时清除 muted/defaultMuted。
+        // 必须点音量图标同步其内部 isMuted 状态，而非只修改 video.muted。
+        var player = video.closest('.xt_video_player_wrap, .xt_video_player_container');
+        var icon = player && player.querySelector('.xt_video_player_volume > .xt_video_player_common_icon');
+        if (icon) {
+            if (!icon.classList.contains('xt_video_player_common_icon_muted')) icon.click();
+            // 音量控件有写入节流，直接归零可覆盖首次点击未写入的情况。
+            if (video.volume !== 0) video.volume = 0;
+        } else {
+            // 原生/其他播放器没有 XtPlayer 的状态同步逻辑。
+            if (!video.muted) video.muted = true;
+            if (video.volume !== 0) video.volume = 0;
+        }
+    }
+
+    function applyPlaybackSettings() {
+        if (!running) return;
+        var video = getVideo();
+        if (!video) return;
+        ensureMuted(video);
+        speed(video);
+    }
+
     function stopAutomation(message) {
         running = false;
         clearInterval(runIt);
@@ -163,7 +187,7 @@
         // HTML 结构
         const panelHTML = `
             <div id="gemini-panel-header">
-                🚀 学堂在线自动学习面板 v1.7.0
+                🚀 学堂在线自动学习面板 v1.7.1
             </div>
             <div style="padding: 10px;">
                 <p><strong>未完成章节数: </strong><span id="video-count">加载中...</span></p>
@@ -486,6 +510,7 @@
         console.log("播放检查/启动----");
         window.clearInterval(runIt);
         if (!running) return;
+        applyPlaybackSettings();
         runIt = setInterval(next, 5000); // 每5秒检查一次
     }
 
@@ -495,6 +520,7 @@
         function next() {
         if (!running || isRefreshingPie) return;
         var video = getVideo();
+        if (video) ensureMuted(video);
         if (!video || video.readyState === 0 ||
             (staleSource && (video.currentSrc || video.src) === staleSource)) {
             if (Date.now() - loadStartedAt > 90000) {
@@ -512,7 +538,7 @@
             return;
         }
         speed(video);
-        video.muted = true;
+        ensureMuted(video);
         if (replayFromStart) {
             try {
                 video.currentTime = 0;
@@ -701,6 +727,10 @@
     function main() {
         console.log("油猴脚本已启动，开始加载操作面板...");
         createPanel();
+        // 新建/替换播放器、播放前均及时应用，包含临时切章刷新阶段。
+        document.addEventListener('play', applyPlaybackSettings, true);
+        document.addEventListener('loadedmetadata', applyPlaybackSettings, true);
+        setInterval(applyPlaybackSettings, 500);
         logStatus("脚本已载入，正在识别未完成的章节...");
         function scan() {
             var path = location.pathname.split('/video/')[0].split('/article/')[0];

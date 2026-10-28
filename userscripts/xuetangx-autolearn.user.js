@@ -1,10 +1,13 @@
 // ==UserScript==
 // @name         学堂在线视频自动学习面板脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.6.2
+// @version      1.7.0
 // @license      MIT
-// @description  为学堂在线(xuetangx.com/learn/)提供一个操作面板，只播放左侧“饼图未满”的章节；自动 2.0 倍速、静音、循环播放，直到饼图满再跳下一节。
+// @description  为学堂在线(xuetangx.com/learn/)提供一个操作面板，只播放左侧“饼图未满”的章节；自动 2.0 倍速、静音、循环播放，兼容新版知识点目录及旧版章节目录。
 // @author       Yangkunlong + ChatGPT
+// @homepageURL  https://github.com/1049133/xuetangx-js
+// @downloadURL  https://raw.githubusercontent.com/1049133/xuetangx-js/main/userscripts/xuetangx-autolearn.user.js
+// @updateURL    https://raw.githubusercontent.com/1049133/xuetangx-js/main/userscripts/xuetangx-autolearn.user.js
 // @match        *://www.xuetangx.com/learn/*
 // @grant        none
 // @run-at       document-idle
@@ -17,11 +20,99 @@
     var index = 0;                  // 当前正在播放的章节索引（对应 lists 的下标）
     var runIt;                      // 定时器
     var lists;                      // 左侧章节列表（class="third"）
-    var dragElement;                // 操作面板 DOM
     var replayCountMap = {};        // 每节的重播次数，防止死循环
-    var isCheckingProgress = false; // 防止重复触发当前节的进度检查
     var pendingCheckIndex = null;   // 记录哪一节需要在切章后检查饼图
     var isRefreshingPie = false;    // 正在“切章刷新饼图”的过程中，避免重复触发
+
+    var running = false;
+    var refreshTimer;
+    var loadStartedAt = 0;
+    var pendingChapterKey = null;
+    var chapterSignature = '';
+    var coursePath = '';
+    var playPending = false;
+    var lastMessage = '';
+    var staleSource = null;
+    var replayFromStart = false;
+
+    function selectChapter(el) {
+        var active = document.querySelector('[id^="unit-item-"].is-active');
+        var video = getVideo();
+        staleSource = active && active.id !== el.id && video ? (video.currentSrc || video.src) : null;
+        loadStartedAt = Date.now();
+        el.click();
+    }
+
+    // 新版知识点目录：折叠章节仍在 DOM 中，用 textContent 读取标题。
+    function getChapterLists() {
+        var modern = Array.from(document.querySelectorAll('[id^="unit-item-"].menu-content-item'));
+        if (modern.length) {
+            return modern.filter(function(el) {
+                var type = el.querySelector('.item-type');
+                return type && /^(视频|video)$/i.test(type.textContent.trim());
+            });
+        }
+        return Array.from(document.getElementsByClassName('third')).filter(function(el) {
+            return chapterChildren(el).length && !isHomeworkChapter(el);
+        });
+    }
+
+    function chapterChildren(el) {
+        if (!el) return [];
+        return el.matches('[id^="unit-item-"]') ? [el] : el.getElementsByTagName('li');
+    }
+
+    function chapterTitle(el) {
+        var node = el.querySelector('.item-name, .titlespan, span');
+        return (node ? node.textContent : el.textContent).trim() || '无标题';
+    }
+
+    function chapterKey(el) {
+        return el.id || chapterTitle(el);
+    }
+
+    function isComplete(el) {
+        if (el.querySelector('.percentFull, .item-status .is-finish')) return true;
+        var pie = el.querySelector('.status-pie');
+        var value = pie ? parseFloat(pie.style.getPropertyValue('--p')) : NaN;
+        return Number.isFinite(value) && value >= 100;
+    }
+
+    function isLocked(el) {
+        // 新版 lessonGraphMenu 的锁图标 U+E660，来自页面公开组件。
+        return el.getAttribute('aria-disabled') === 'true' ||
+            Array.from(el.querySelectorAll('.item-status .iconfont')).some(function(icon) {
+                return icon.textContent.trim() === '\ue660';
+            });
+    }
+
+    function getVideo() {
+        var videos = Array.from(document.querySelectorAll('video'));
+        return videos.find(function(v) { return v.getClientRects().length && v.matches('.xt_video_player'); }) ||
+            videos.find(function(v) { return v.getClientRects().length; });
+    }
+
+    function stopAutomation(message) {
+        running = false;
+        clearInterval(runIt);
+        clearTimeout(refreshTimer);
+        isRefreshingPie = false;
+        pendingCheckIndex = null;
+        pendingChapterKey = null;
+        staleSource = null;
+        replayFromStart = false;
+        if (message) logStatus(message);
+        var button = document.getElementById('stop-automation');
+        if (button) button.disabled = true;
+    }
+
+    function tryPlay(video) {
+        if (playPending || !video.paused || video.ended) return;
+        playPending = true;
+        Promise.resolve().then(function() { return video.play(); }).catch(function(error) {
+            logStatus('播放未成功（' + error.name + '），请手动点击播放器播放。');
+        }).finally(function() { playPending = false; });
+    }
 
     // --- UI/操作面板 相关函数 ---
 
@@ -29,6 +120,7 @@
      * 构建操作面板的HTML和CSS，并使其可拖动
      */
     function createPanel() {
+        if (document.getElementById('gemini-automation-panel')) return;
         // CSS 样式
         const panelStyle = `
             #gemini-automation-panel {
@@ -71,17 +163,19 @@
         // HTML 结构
         const panelHTML = `
             <div id="gemini-panel-header">
-                🚀 学堂在线自动学习面板
+                🚀 学堂在线自动学习面板 v1.7.0
             </div>
             <div style="padding: 10px;">
                 <p><strong>未完成章节数: </strong><span id="video-count">加载中...</span></p>
                 <div style="margin-bottom: 15px; margin-top: 10px;">
-                    <label for="start-select" style="display: block; font-weight: bold;">选择起始章节（仅显示饼图未满）:</label>
+                    <label for="start-select" style="display: block; font-weight: bold;">选择起始视频（仅显示未完成且可学习的视频）:</label>
                     <select id="start-select" style="width: 100%; padding: 7px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;"></select>
                 </div>
                 <button id="start-automation" style="width: 100%; padding: 10px; background-color: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
                     ▶️ 从所选章节开始自动学习
                 </button>
+                <button id="stop-automation" disabled style="width:100%;padding:8px;margin-top:6px;">停止自动切换</button>
+                <button id="rescan-automation" style="width:100%;padding:8px;margin-top:6px;">重新扫描目录</button>
                 <p style="margin-top: 10px; font-size: 12px; color: #666; text-align: center;">
                     * 只播放饼图未满的章节；自动 2.0 倍速、静音，每 5 秒检查进度，饼图未满会自动重播本节。
                 </p>
@@ -100,7 +194,13 @@
         panel.innerHTML = panelHTML;
         document.body.appendChild(panel);
 
-        dragElement = panel;
+        document.getElementById('stop-automation').onclick = function() {
+            stopAutomation('已停止自动切换；当前视频可手动控制。');
+        };
+        document.getElementById('rescan-automation').onclick = function() {
+            if (running) stopAutomation('重新扫描目录，已停止自动切换，请重新选择起点。');
+            populatePanel();
+        };
         makeDraggable(panel);
 
         return panel;
@@ -121,7 +221,7 @@
         var span = li.querySelector("span.titlespan.noScore");
         if (!span) return false;
 
-        var text = (span.innerText || "").trim();
+        var text = (span.textContent || "").trim();
         if (!text) return false;
 
         // 只在这个 span 文本里找关键字
@@ -136,6 +236,8 @@
         var box = document.getElementById("gemini-status");
         if (!box) return;
 
+        if (lastMessage === msg) return;
+        lastMessage = msg;
         var time = new Date().toLocaleTimeString();
         var line = "[" + time + "] " + msg;
 
@@ -145,6 +247,7 @@
             box.textContent = line;
         }
 
+        box.textContent = box.textContent.split('\n').slice(-60).join('\n');
         box.scrollTop = box.scrollHeight;
     }
 
@@ -190,31 +293,32 @@
      */
     function populatePanel() {
         try {
-            lists = document.getElementsByClassName("third");
+            lists = getChapterLists();
 
             const videoCountSpan = document.getElementById("video-count");
             const startSelect = document.getElementById("start-select");
             const startButton = document.getElementById("start-automation");
 
             if (lists.length === 0) {
-                videoCountSpan.innerText = "0 (未找到章节，请检查类名 'third')";
-                logStatus("未找到任何章节元素，可能页面结构有变化。");
+                videoCountSpan.innerText = "0（等待视频目录加载，可展开目录后重新扫描）";
+                logStatus("等待视频目录加载；若目录已显示，请点击重新扫描。");
                 startSelect.innerHTML = '<option value="-1">未找到视频列表</option>';
                 startButton.disabled = true;
                 return;
             }
 
+            var selectedKey = startSelect.selectedOptions[0]?.dataset.key;
             startSelect.innerHTML = '';
             let unfinishedCount = 0;
 
             for (let i = 0; i < lists.length; i++) {
-                const temp = lists[i].getElementsByTagName("li");
+                const temp = chapterChildren(lists[i]);
                 if (temp.length === 0) continue;
                 const li = temp[0];
 
                 // 有 .percentFull 说明饼图已满，直接跳过
-                const fullIcon = li.querySelector(".percentFull");
-                if (fullIcon) {
+                const fullIcon = isComplete(li);
+                if (fullIcon || isLocked(li)) {
                     continue;
                 }
                 // 作业/习题：用 DOM 标记过滤掉
@@ -225,13 +329,15 @@
 
                 unfinishedCount++;
 
-                let titleText = "无法获取标题";
+                let titleText = chapterTitle(li);
                 const titleSpan = li.getElementsByTagName("span");
                 if (titleSpan.length > 0) {
-                    titleText = titleSpan[0].innerText.trim();
+                    titleText = chapterTitle(li);
                 }
 
                 const option = document.createElement("option");
+                option.dataset.key = chapterKey(li);
+                option.selected = selectedKey ? selectedKey === chapterKey(li) : li.classList.contains('is-active');
                 option.value = i; // 直接保存原始索引
                 option.innerText = `[#${i}] ${titleText}`;
                 startSelect.appendChild(option);
@@ -243,7 +349,7 @@
             if (unfinishedCount === 0) {
                 startSelect.innerHTML = '<option value="-1">没有未完成的章节</option>';
                 startButton.disabled = true;
-                logStatus("所有章节饼图都已满，无需自动学习。");
+            logStatus("当前没有未完成且可学习的视频；请查看平台进度及锁定状态。");
                 return;
             } else {
                 startButton.disabled = false;
@@ -256,7 +362,10 @@
                 if (!isNaN(selectedIndex) && selectedIndex >= 0) {
                     console.log("用户选择从章节 #", selectedIndex, " 开始。");
                     logStatus("开始自动学习，从章节 #" + selectedIndex + " 开始（饼图未满）。");
-                    window.clearInterval(runIt);
+                    stopAutomation();
+                    replayCountMap = {};
+                    running = true;
+                    document.getElementById('stop-automation').disabled = false;
                     index = selectedIndex;
                     startNum(selectedIndex);
                 } else {
@@ -278,13 +387,13 @@
      * @returns {number} - 下一未完成章节索引；找不到则返回 -1
      */
     function findNextUnfinished(startIndex) {
-        lists = document.getElementsByClassName("third");
+        lists = getChapterLists();
         for (let i = startIndex + 1; i < lists.length; i++) {
-            const temp = lists[i].getElementsByTagName("li");
+            const temp = chapterChildren(lists[i]);
             if (temp.length === 0) continue;
             const li = temp[0];
-            const fullIcon = li.querySelector(".percentFull");
-            if (!fullIcon) {
+            const fullIcon = isComplete(li);
+            if (!fullIcon && !isLocked(li) && !isHomeworkChapter(lists[i])) {
                 return i;
             }
         }
@@ -300,8 +409,7 @@
         if (nextIdx === -1) {
             console.log("没有更多未完成的章节，脚本结束。");
             logStatus("没有更多未完成的章节，脚本结束。");
-            window.clearInterval(runIt);
-            alert("未完成的章节已全部播放完毕！");
+            stopAutomation('所选起点之后已无可学习的未完成视频，请以平台显示进度为准。');
             return;
         }
         startNum(nextIdx);
@@ -314,19 +422,20 @@
      * @param {number} num - 章节索引
      */
         function startNum(num) {
-        lists = document.getElementsByClassName("third");
+        lists = getChapterLists();
 
-        if (num >= lists.length) {
+        if (num < 0 || num >= lists.length) {
             console.log("索引超出范围，尝试结束。");
             logStatus("章节索引超出范围，脚本结束。");
-            window.clearInterval(runIt);
-            alert("脚本运行结束。");
+            stopAutomation();
             return;
         }
 
+        if (!running) return;
         index = num;
+        loadStartedAt = Date.now();
         var currentList = lists[index];
-        var temp = currentList.getElementsByTagName("li");
+        var temp = chapterChildren(currentList);
 
         if (temp.length === 0) {
             console.log("章节 #" + index + " 中未找到 'li' 元素。尝试跳过。");
@@ -345,7 +454,7 @@
         }
 
         // 2. 饼图已经满：不用再刷，跳下一个
-        var fullIcon = li.querySelector(".percentFull");
+        var fullIcon = isComplete(li);
         if (fullIcon) {
             logStatus("章节 #" + index + " 饼图已经满了，自动跳到下一个未完成章节。");
             gotoNextUnfinished(index);
@@ -353,10 +462,15 @@
         }
 
         // 3. 真的需要刷这节 → 点击进入，开始自动播放
-        li.click();
+        if (isLocked(li)) {
+            logStatus('当前视频暂不可学习，已停止。');
+            stopAutomation();
+            return;
+        }
+        selectChapter(li);
 
         var titleSpan = li.getElementsByTagName("span");
-        var titleText = titleSpan.length > 0 ? titleSpan[0].innerText.trim() : "无标题";
+        var titleText = chapterTitle(li);
 
         console.log("当前章节编号：" + index + ", 章节标题：" + titleText);
         logStatus("正在播放章节 #" + index + " - " + titleText);
@@ -371,6 +485,7 @@
     function start() {
         console.log("播放检查/启动----");
         window.clearInterval(runIt);
+        if (!running) return;
         runIt = setInterval(next, 5000); // 每5秒检查一次
     }
 
@@ -378,61 +493,61 @@
      * 定时器触发函数：检查播放进度，进行下一节跳转
      */
         function next() {
-        var videos = document.getElementsByClassName("xt_video_player");
-        var video = videos.length > 0 ? videos[0] : undefined;
-
-        // --- 当前不是视频：当作作业/讨论，直接跳下一节 ---
-        if (video === undefined) {
-            console.log("未找到视频播放器，可能是作业/讨论，跳转下一个未完成章节。");
-            logStatus("当前章节不是视频（可能是作业/讨论），跳到下一个未完成章节。");
-            gotoNextUnfinished(index);
+        if (!running || isRefreshingPie) return;
+        var video = getVideo();
+        if (!video || video.readyState === 0 ||
+            (staleSource && (video.currentSrc || video.src) === staleSource)) {
+            if (Date.now() - loadStartedAt > 90000) {
+                stopAutomation('视频加载超过90秒，请检查登录、课程权限或网络后重新启动。');
+            } else {
+                logStatus('等待当前视频加载，不自动跳过。');
+            }
             return;
         }
-
+        staleSource = null;
+        // 手动切章时停止，避免旧索引控制新页面。
+        var active = document.querySelector('[id^="unit-item-"].is-active');
+        if (active && lists[index] && active.id !== lists[index].id) {
+            stopAutomation('检测到手动切换章节，已停止自动切换。');
+            return;
+        }
+        speed(video);
+        video.muted = true;
+        if (replayFromStart) {
+            try {
+                video.currentTime = 0;
+                replayFromStart = false;
+            } catch (error) {
+                logStatus('等待视频可重播：' + error.name);
+                return;
+            }
+        }
         var c = video.currentTime;
         var d = video.duration;
 
         if (!isFinite(d) || d < 1) {
+            if (Date.now() - loadStartedAt > 90000) {
+                stopAutomation('视频时长持续无效，请检查播放器后重新启动。');
+                return;
+            }
             console.log("视频时长无效或仍在加载中，等待加载...");
             logStatus("视频时长未正确获取，等待加载中...");
-            if (video.paused) {
-                video.play().catch(function(error) {
-                    console.log("尝试播放失败 (可能需要用户交互)：", error.name);
-                    logStatus("尝试播放视频失败，可能需要手动点一下播放按钮。");
-                });
-            }
+            tryPlay(video);
             return;
         }
 
-        // 保证 2 倍速 & 静音
-        speed(video);
-        soundClose();
-
-        if (video.paused) {
-            console.log("检测到视频暂停，尝试强制播放...");
-            logStatus("检测到视频暂停，尝试继续播放当前章节。");
-
-            video.play().catch(function(error) {
-                console.log("视频强制播放失败，可能需要用户交互。错误类型:", error.name);
-                logStatus("强制播放失败，可能需要你手动点一下播放按钮。");
-            });
-
-            var staNow = document.getElementsByClassName("play-btn-tip")[0];
-            if (staNow && staNow.innerText === "播放") {
-                staNow.click();
-            }
-        }
+        tryPlay(video);
 
         var ratio = c / d;
         var percentText = (ratio * 100).toFixed(2) + "%";
-        var remain = d - c;
 
         // ✅ 关键点：只要这一遍“看完了”，就触发刷新饼图的流程
-        if (video.ended || remain <= 1.0) {
+        if (video.ended) {
             if (isRefreshingPie) return;
 
             isRefreshingPie = true;
             pendingCheckIndex = index;
+            pendingChapterKey = chapterKey(lists[index]);
 
             console.log("本节视频完整播放结束，进度：" + percentText + "，准备切换章节刷新饼图...");
             logStatus("本节视频完整播放结束（" + percentText + "），切到其他章节刷新饼图，然后再看饼图是否满。");
@@ -450,7 +565,7 @@
      * 为了刷新当前章节的饼图：临时切换到别的章节
      */
     function switchChapterForPieRefresh() {
-        lists = document.getElementsByClassName("third");
+        lists = getChapterLists();
 
         var jumpIndex = -1;
         if (lists.length > 1) {
@@ -461,15 +576,17 @@
             }
         }
 
+        if (jumpIndex !== -1 && isLocked(lists[jumpIndex])) jumpIndex = -1;
+
         if (jumpIndex === -1) {
             // 只有一节课，没得切章，那就直接按原逻辑检查
-            logStatus("只有一个章节，无法切章刷新饼图，直接检查当前章节饼图。");
-            checkProgressAndMaybeGotoNext(null); // video 可选
+            logStatus("没有其他可切换的视频，等待平台更新当前视频进度。");
+            refreshTimer = setTimeout(checkProgressAndMaybeGotoNext, 5000);
             return;
         }
 
         var list = lists[jumpIndex];
-        var lis = list.getElementsByTagName("li");
+        var lis = chapterChildren(list);
         if (lis.length > 0) {
             lis[0].click();
             console.log("为刷新饼图，临时切到章节 #" + jumpIndex);
@@ -477,7 +594,8 @@
         }
 
         // 给后台一点时间刷新进度，之后再去检查 pendingCheckIndex 那节的饼图
-        setTimeout(function() {
+        refreshTimer = setTimeout(function() {
+            if (!running) return;
             checkProgressAndMaybeGotoNext(null);  // 之后统一在这里决定是重播还是下一节
         }, 5000);
     }
@@ -487,11 +605,10 @@
      * 如果饼图满 → 跳到下一未完成章节
      * 如果没满   → 切回去重播 pendingCheckIndex
      */
-    var MAX_REPLAY_PER_CHAPTER = 20;
+    var MAX_REPLAY_PER_CHAPTER = 3;
 
     function checkProgressAndMaybeGotoNext() {
-        isCheckingProgress = false;
-        lists = document.getElementsByClassName("third");
+        lists = getChapterLists();
 
         if (pendingCheckIndex == null) {
             isRefreshingPie = false;
@@ -499,7 +616,12 @@
             return;
         }
 
-        var idx = pendingCheckIndex;
+        if (!running) return;
+        var idx = lists.findIndex(function(el) { return chapterKey(el) === pendingChapterKey; });
+        if (idx < 0) {
+            stopAutomation('目录已变化，无法定位待检查视频，请重新扫描后启动。');
+            return;
+        }
         var currentList = lists[idx];
 
         if (!currentList) {
@@ -511,7 +633,7 @@
             return;
         }
 
-        var lis = currentList.getElementsByTagName("li");
+        var lis = chapterChildren(currentList);
         if (lis.length === 0) {
             console.log("pending 章节没有 li，跳到下一个未完成章节。");
             logStatus("pending 章节没有 li，跳到下一个未完成章节。");
@@ -522,7 +644,7 @@
         }
 
         var currentLi = lis[0];
-        var fullIcon = currentLi.querySelector(".percentFull");
+        var fullIcon = isComplete(currentLi);
 
         // ✅ 饼图满了：这一节彻底搞定，跳到下一个未完成视频
         if (fullIcon) {
@@ -543,7 +665,7 @@
         logStatus("章节 #" + idx + " 饼图仍未满，第 " + times + " 次重播。");
 
         // 防止真的无限死循环（比如这节是互动题/课件，永远不会满）
-        if (times >= MAX_REPLAY_PER_CHAPTER) {
+        if (times > MAX_REPLAY_PER_CHAPTER) {
             console.log("本章节重播超过 " + MAX_REPLAY_PER_CHAPTER + " 次仍未满，跳到下一个未完成章节。");
             logStatus("章节 #" + idx + " 看了 " + MAX_REPLAY_PER_CHAPTER +
                       " 次饼图仍未满，可能需要你手动答题/操作，已自动跳过这一节。");
@@ -556,38 +678,13 @@
         // 重新回到这一节，从头播放
         index = idx;
         pendingCheckIndex = null;
+
+        selectChapter(currentLi);
+        replayFromStart = true;
         isRefreshingPie = false;
-
-        currentLi.click();  // 再次进入该章节
-
-        setTimeout(function() {
-            var videos = document.getElementsByClassName("xt_video_player");
-            var v = videos.length > 0 ? videos[0] : null;
-            if (v) {
-                v.currentTime = 0;   // ✅ 硬从 0 开始看一遍
-                v.play().catch(function(err) {
-                    console.log("重播当前视频失败：", err.name);
-                    logStatus("重播当前视频失败，可能需要你手动点一下播放。");
-                });
-            }
-            start(); // 重新启动定时检查
-        }, 1000);
+        start();
     }
 
-
-    /**
-     * 关闭视频声音 (通过点击 UI 按钮)
-     */
-    function soundClose() {
-        var mutedIcon = document.getElementsByClassName("xt_video_player_common_icon_muted");
-        if (mutedIcon.length === 0) {
-            var muteButton = document.getElementsByClassName("xt_video_player_common_icon")[0];
-            if (muteButton) {
-                muteButton.click();
-                console.log("视频声音关闭");
-            }
-        }
-    }
 
     /**
      * 设置播放速度为2.0 (直接操作 video 元素)
@@ -605,7 +702,24 @@
         console.log("油猴脚本已启动，开始加载操作面板...");
         createPanel();
         logStatus("脚本已载入，正在识别未完成的章节...");
-        setTimeout(populatePanel, 3000);
+        function scan() {
+            var path = location.pathname.split('/video/')[0].split('/article/')[0];
+            if (coursePath && path !== coursePath) stopAutomation('课程页面已变化，已停止。');
+            coursePath = path;
+            var chapters = getChapterLists();
+            var signature = path + chapters.map(function(el) {
+                return chapterKey(el) + ':' + chapterTitle(el) + ':' + isComplete(el) + ':' + isLocked(el);
+            }).join('|');
+            if (signature !== chapterSignature) {
+                if (running && lists && lists.map(chapterKey).join('|') !== chapters.map(chapterKey).join('|')) {
+                    stopAutomation('视频目录已变化，请重新选择起点。');
+                }
+                chapterSignature = signature;
+                populatePanel();
+            }
+        }
+        scan();
+        setInterval(scan, 2000);
     }
 
     setTimeout(main, 2000);

@@ -1,0 +1,15 @@
+{
+  "name": "xuetangx-js-compatibility",
+  "version": "1.7.0",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/compatibility.test.cjs",
+    "check": "node --check userscripts/xuetangx-autolearn.user.js"
+  },
+  "devDependencies": {
+    "jsdom": "30.1.3"
+  },
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  }
+}

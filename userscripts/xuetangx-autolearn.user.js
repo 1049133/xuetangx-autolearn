@@ -1,13 +1,13 @@
 // ==UserScript==
 // @name         学堂在线视频自动学习面板脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.1
+// @version      1.7.2
 // @license      MIT
 // @description  为学堂在线(xuetangx.com/learn/)提供一个操作面板，只播放左侧“饼图未满”的章节；自动 2.0 倍速、静音、循环播放，兼容新版知识点目录及旧版章节目录。
 // @author       Yangkunlong + ChatGPT
-// @homepageURL  https://github.com/1049133/xuetangx-js
-// @downloadURL  https://raw.githubusercontent.com/1049133/xuetangx-js/main/userscripts/xuetangx-autolearn.user.js
-// @updateURL    https://raw.githubusercontent.com/1049133/xuetangx-js/main/userscripts/xuetangx-autolearn.user.js
+// @homepageURL  https://github.com/1049133/xuetangx-autolearn
+// @downloadURL  https://raw.githubusercontent.com/1049133/xuetangx-autolearn/main/userscripts/xuetangx-autolearn.user.js
+// @updateURL    https://raw.githubusercontent.com/1049133/xuetangx-autolearn/main/userscripts/xuetangx-autolearn.user.js
 // @match        *://www.xuetangx.com/learn/*
 // @grant        none
 // @run-at       document-idle
@@ -187,7 +187,7 @@
         // HTML 结构
         const panelHTML = `
             <div id="gemini-panel-header">
-                🚀 学堂在线自动学习面板 v1.7.1
+                🚀 学堂在线自动学习面板 v1.7.2
             </div>
             <div style="padding: 10px;">
                 <p><strong>未完成章节数: </strong><span id="video-count">加载中...</span></p>

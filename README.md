@@ -1,10 +1,10 @@
 # 学堂在线脚本｜XuetangX 油猴脚本 · 新版适配
 
-适用于学堂在线（xuetangx.com）的 **Tampermonkey 油猴脚本**，提供视频自动播放、自动 2 倍速、自动静音、未完成视频识别和章节自动切换。支持新版知识点目录及旧版课程目录，当前版本 **v1.7.1**。
+适用于学堂在线（xuetangx.com）的 **Tampermonkey 油猴脚本**，提供视频自动播放、自动 2 倍速、自动静音、未完成视频识别和章节自动切换。支持新版知识点目录及旧版课程目录，当前版本 **v1.7.2**。
 
-基于 [yang-kun-long/xuetangx-js](https://github.com/yang-kun-long/xuetangx-js) 的 1.6.2 修改，保留 MIT 许可证。这是由 1049133 维护的新版兼容 Fork，原作者仓库的在线安装链接仍是原版。
+基于 [yang-kun-long/xuetangx-js](https://github.com/yang-kun-long/xuetangx-js) 的 1.6.2 修改，保留 MIT 许可证。这是由 1049133 独立维护和发布的学堂在线脚本项目，保留代码历史、原作者版权声明及 MIT 许可证；GitHub 仓库不属于 Fork 网络。
 
-**[点击安装或更新脚本](https://raw.githubusercontent.com/1049133/xuetangx-js/main/userscripts/xuetangx-autolearn.user.js)** · **[下载 v1.7.1](https://github.com/1049133/xuetangx-js/releases/tag/v1.7.1)**
+**[点击安装或更新脚本](https://raw.githubusercontent.com/1049133/xuetangx-autolearn/main/userscripts/xuetangx-autolearn.user.js)** · **[下载 v1.7.2](https://github.com/1049133/xuetangx-autolearn/releases/tag/v1.7.2)**
 
 保留自动 **2 倍速、静音**及切换下一未完成视频；需在面板点击启动。
 
@@ -34,7 +34,7 @@
 
 **方法 A：一键安装（推荐）**
 
-1. 在已安装油猴的同一浏览器中，点击 **[安装 / 更新学堂在线脚本](https://raw.githubusercontent.com/1049133/xuetangx-js/main/userscripts/xuetangx-autolearn.user.js)**。
+1. 在已安装油猴的同一浏览器中，点击 **[安装 / 更新学堂在线脚本](https://raw.githubusercontent.com/1049133/xuetangx-autolearn/main/userscripts/xuetangx-autolearn.user.js)**。
 2. 浏览器会打开油猴脚本确认页。核对脚本名称“学堂在线视频自动学习面板脚本”和版本号后，点击“安装”；已安装时点击“更新”。
 3. 打开油猴“管理面板”，确认脚本处于启用状态。同名旧脚本仅保留一份启用。
 
@@ -42,7 +42,7 @@
 
 如果一键链接只显示 JavaScript 代码，或没有弹出安装页：
 
-1. 打开 [脚本源码页面](https://github.com/1049133/xuetangx-js/blob/main/userscripts/xuetangx-autolearn.user.js)，使用 GitHub 的复制原始文件按钮复制全部代码；也可以从 [版本发布页](https://github.com/1049133/xuetangx-js/releases/latest) 下载 `xuetangx-autolearn.user.js`，用文本编辑器打开并复制全文。
+1. 打开 [脚本源码页面](https://github.com/1049133/xuetangx-autolearn/blob/main/userscripts/xuetangx-autolearn.user.js)，使用 GitHub 的复制原始文件按钮复制全部代码；也可以从 [版本发布页](https://github.com/1049133/xuetangx-autolearn/releases/latest) 下载 `xuetangx-autolearn.user.js`，用文本编辑器打开并复制全文。
 2. 点击油猴图标，选择“添加新脚本 / 创建新脚本”。若正在更新原脚本，则在管理面板中直接打开原脚本编辑器。
 3. 删除编辑器中的默认模板，将复制的脚本**全部内容**粘贴进去，包括顶部 `// ==UserScript==` 元数据。
 4. 按 **Ctrl+S** 保存，回到油猴管理面板，确认脚本已启用。
@@ -50,7 +50,7 @@
 ### 第三步：打开课程并启动
 
 1. 登录 [学堂在线](https://www.xuetangx.com/)，进入已选课程的视频学习页面，网址以 `https://www.xuetangx.com/learn/` 开头。
-2. 安装或更新后**刷新课程页**，右侧应出现“学堂在线自动学习面板 v1.7.1”。
+2. 安装或更新后**刷新课程页**，右侧应出现“学堂在线自动学习面板 v1.7.2”。
 3. 等待目录加载，在下拉框中选择起始视频，然后点击“从所选章节开始自动学习”。
 4. 启动后会自动设置 **2 倍速和静音**。如果浏览器阻止自动播放，先手动点击一次播放器播放。
 5. 点击“停止自动切换”可停止脚本控制，当前视频保持原状态，可自行暂停或调整音量；“重新扫描目录”也会停止自动切换。
@@ -63,15 +63,19 @@
 
 **更新后仍显示旧版本，或出现两个面板？**
 
-确认更新的是本仓库脚本，禁用重复的旧脚本，然后刷新课程页。当前版本应为 v1.7.1；安装后旧页面中的脚本不会自动替换。
+确认更新的是本仓库脚本，禁用重复的旧脚本，然后刷新课程页。当前版本应为 v1.7.2；安装后旧页面中的脚本不会自动替换。
 
 **为什么静音后又有声音？**
 
-请确认已更新到 v1.7.1 并点击面板启动。1.7.0 仅设置原生 muted，会被平台播放器清除；1.7.1 已改为同步播放器音量开关。停止自动切换后，不再强制静音。
+请确认已更新到 v1.7.2 并点击面板启动。1.7.0 仅设置原生 muted，会被平台播放器清除；1.7.1 起已改为同步播放器音量开关。停止自动切换后，不再强制静音。
 
 **为什么在 GitHub 搜索“学堂在线脚本”暂时看不到本项目？**
 
-本仓库保留了原项目的 Fork 关系，GitHub 默认仓库搜索可能过滤 Fork，索引更新也需要时间。可搜索 [`学堂在线脚本 fork:true`](https://github.com/search?q=%E5%AD%A6%E5%A0%82%E5%9C%A8%E7%BA%BF%E8%84%9A%E6%9C%AC+fork%3Atrue&type=repositories)，或直接访问 [1049133/xuetangx-js](https://github.com/1049133/xuetangx-js)。也可使用 XuetangX、学堂在线油猴脚本、Tampermonkey 等名称查找。
+本项目已作为独立仓库发布，可搜索“学堂在线脚本”“学堂在线油猴脚本”或 XuetangX。新仓库需要等待 GitHub 更新索引，无法保证即时收录或排名；也可直接访问 [1049133/xuetangx-autolearn](https://github.com/1049133/xuetangx-autolearn)。
+
+**从旧仓库安装的脚本怎么迁移？**
+
+使用上方安装链接更新到 v1.7.2，更新地址会指向本独立仓库，之后由这里提供更新。脚本名称和 namespace 保持一致；若出现重复脚本，仅启用一份。旧仓库 [1049133/xuetangx-js](https://github.com/1049133/xuetangx-js) 保留历史版本。
 
 ## 适配内容
 
@@ -107,3 +111,7 @@ npm test
 ## 1.7.1 静音修复
 
 XtPlayer 在 timeupdate.volume 中定期清除原生 muted/defaultMuted，原版每五秒设置 muted 会被覆盖。新版通过播放器音量图标同步内部 isMuted 状态，再将 volume 归零；启动时立即应用，并在播放、元数据加载和每 500 毫秒复查时保持静音，覆盖临时切章阶段。停止自动切换后不再干预音量。
+
+## 1.7.2 独立发布
+
+建立独立仓库 xuetangx-autolearn，更新安装及自动更新地址。保留新旧目录支持、2 倍速、静音修复和原项目代码历史。原作者版权声明与 MIT 许可证继续保留。

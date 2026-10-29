@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         学堂在线视频自动学习面板脚本
 // @namespace    http://tampermonkey.net/
-// @version      1.7.2
+// @version      1.7.3
 // @license      MIT
 // @description  为学堂在线(xuetangx.com/learn/)提供一个操作面板，只播放左侧“饼图未满”的章节；自动 2.0 倍速、静音、循环播放，兼容新版知识点目录及旧版章节目录。
 // @author       Yangkunlong + ChatGPT
@@ -34,6 +34,15 @@
     var lastMessage = '';
     var staleSource = null;
     var replayFromStart = false;
+    var refreshTargetKey = null;
+    var refreshStartedAt = 0;
+    var progressBeforeRefresh = '';
+    var progressChangedAfterSwitch = false;
+
+    function progressSignature(el) {
+        var pie = el.querySelector('.status-pie');
+        return isComplete(el) ? 'complete' : pie ? pie.style.getPropertyValue('--p') : 'unknown';
+    }
 
     function selectChapter(el) {
         var active = document.querySelector('[id^="unit-item-"].is-active');
@@ -125,6 +134,8 @@
         pendingChapterKey = null;
         staleSource = null;
         replayFromStart = false;
+        refreshTargetKey = null;
+        progressChangedAfterSwitch = false;
         if (message) logStatus(message);
         var button = document.getElementById('stop-automation');
         if (button) button.disabled = true;
@@ -187,7 +198,7 @@
         // HTML 结构
         const panelHTML = `
             <div id="gemini-panel-header">
-                🚀 学堂在线自动学习面板 v1.7.2
+                🚀 学堂在线自动学习面板 v1.7.3
             </div>
             <div style="padding: 10px;">
                 <p><strong>未完成章节数: </strong><span id="video-count">加载中...</span></p>
@@ -201,7 +212,7 @@
                 <button id="stop-automation" disabled style="width:100%;padding:8px;margin-top:6px;">停止自动切换</button>
                 <button id="rescan-automation" style="width:100%;padding:8px;margin-top:6px;">重新扫描目录</button>
                 <p style="margin-top: 10px; font-size: 12px; color: #666; text-align: center;">
-                    * 只播放饼图未满的章节；自动 2.0 倍速、静音，每 5 秒检查进度，饼图未满会自动重播本节。
+                    * 只播放饼图未满的章节；自动 2.0 倍速、静音，播放结束后点击下一视频刷新饼图；等待平台确认后继续或重播。
                 </p>
 
                 <div id="gemini-status"
@@ -592,38 +603,27 @@
      */
     function switchChapterForPieRefresh() {
         lists = getChapterLists();
-
+        // 优先真正点击下一个可学习视频；末节才用前一个视频刷新。
         var jumpIndex = -1;
-        if (lists.length > 1) {
-            if (index + 1 < lists.length) {
-                jumpIndex = index + 1;
-            } else if (index - 1 >= 0) {
-                jumpIndex = index - 1;
+        for (var i = index + 1; i < lists.length; i++) {
+            if (!isLocked(lists[i])) { jumpIndex = i; break; }
+        }
+        if (jumpIndex === -1) {
+            for (var j = index - 1; j >= 0; j--) {
+                if (!isLocked(lists[j])) { jumpIndex = j; break; }
             }
         }
-
-        if (jumpIndex !== -1 && isLocked(lists[jumpIndex])) jumpIndex = -1;
-
         if (jumpIndex === -1) {
-            // 只有一节课，没得切章，那就直接按原逻辑检查
-            logStatus("没有其他可切换的视频，等待平台更新当前视频进度。");
-            refreshTimer = setTimeout(checkProgressAndMaybeGotoNext, 5000);
+            stopAutomation('视频已播完，但没有其他可点击的视频刷新饼图；完成状态待平台确认，请手动检查。');
             return;
         }
-
-        var list = lists[jumpIndex];
-        var lis = chapterChildren(list);
-        if (lis.length > 0) {
-            lis[0].click();
-            console.log("为刷新饼图，临时切到章节 #" + jumpIndex);
-            logStatus("为刷新饼图，暂时切到章节 #" + jumpIndex + "。");
-        }
-
-        // 给后台一点时间刷新进度，之后再去检查 pendingCheckIndex 那节的饼图
-        refreshTimer = setTimeout(function() {
-            if (!running) return;
-            checkProgressAndMaybeGotoNext(null);  // 之后统一在这里决定是重播还是下一节
-        }, 5000);
+        progressBeforeRefresh = progressSignature(lists[index]);
+        progressChangedAfterSwitch = false;
+        refreshTargetKey = chapterKey(lists[jumpIndex]);
+        refreshStartedAt = Date.now();
+        selectChapter(chapterChildren(lists[jumpIndex])[0]);
+        logStatus('已点击视频 #' + jumpIndex + '，等待平台刷新上一节饼图（最多30秒），暂不判定未完成。');
+        refreshTimer = setTimeout(checkProgressAndMaybeGotoNext, 1000);
     }
 
     /**
@@ -671,6 +671,18 @@
 
         var currentLi = lis[0];
         var fullIcon = isComplete(currentLi);
+        var active = document.querySelector('[id^="unit-item-"].is-active');
+        var switched = !active || chapterKey(active) === refreshTargetKey;
+        var elapsed = Date.now() - refreshStartedAt;
+        if (!switched) {
+            if (elapsed >= 30000) {
+                stopAutomation('未能确认刷新用的视频已打开；上一节完成状态待确认，请检查页面后重新启动。');
+            } else {
+                refreshTimer = setTimeout(checkProgressAndMaybeGotoNext, 1000);
+            }
+            return;
+        }
+        if (progressSignature(currentLi) !== progressBeforeRefresh) progressChangedAfterSwitch = true;
 
         // ✅ 饼图满了：这一节彻底搞定，跳到下一个未完成视频
         if (fullIcon) {
@@ -679,9 +691,33 @@
             replayCountMap[idx] = 0;
             isRefreshingPie = false;
             pendingCheckIndex = null;
-            gotoNextUnfinished(idx);
+            pendingChapterKey = null;
+            var nextIdx = findNextUnfinished(idx);
+            if (nextIdx !== -1 && chapterKey(lists[nextIdx]) === refreshTargetKey) {
+                // 刷新时已点开下一节，不再点击一次以免重载/重置播放进度。
+                index = nextIdx;
+                refreshTargetKey = null;
+                logStatus('上一节饼图已满，继续播放已打开的视频 #' + index + '。');
+                start();
+            } else {
+                refreshTargetKey = null;
+                gotoNextUnfinished(idx);
+            }
             return;
         }
+
+        if (elapsed < 30000) {
+            var refreshVideo = getVideo();
+            if (refreshVideo && refreshVideo.readyState > 0 &&
+                (!staleSource || (refreshVideo.currentSrc || refreshVideo.src) !== staleSource)) tryPlay(refreshVideo);
+            refreshTimer = setTimeout(checkProgressAndMaybeGotoNext, 1000);
+            return;
+        }
+        if (!progressChangedAfterSwitch) {
+            stopAutomation('已点击其他视频，但30秒内未观察到上一节饼图更新；完成状态待确认，已停止，避免按旧进度重复播放。');
+            return;
+        }
+        refreshTargetKey = null;
 
         // ❌ 饼图没满：这一节需要再看一遍
         replayCountMap[idx] = (replayCountMap[idx] || 0) + 1;

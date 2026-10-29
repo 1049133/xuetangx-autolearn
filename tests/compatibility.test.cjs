@@ -117,11 +117,54 @@ test('old ended video is ignored while selected next lesson loads', () => {
     h.start(); h.api.next(); assert.equal(h.api.index, 1); assert.equal(h.api.running, true);
     assert.match(h.doc.querySelector('#gemini-status').textContent, /等待当前视频加载/); h.close();
 });
-test('single video replays after waiting, with working stop control', () => {
+test('single video without a refresh target stops with pending status instead of replaying stale progress', () => {
     const h = harness(unit(1)); const v = h.video({ ended: true, time: 100 });
     h.start(); h.api.next(); h.advance(5000);
     Object.defineProperty(v, 'ended', { configurable: true, value: false });
-    h.api.next(); assert.equal(v.currentTime, 0); h.stop(); assert.equal(h.api.running, false); h.close();
+    h.api.next(); assert.equal(v.currentTime, 100); assert.equal(h.api.running, false);
+    assert.match(h.doc.querySelector('#gemini-status').textContent, /完成状态待平台确认/); h.close();
+});
+
+test('delayed pie refresh does not replay after five seconds and does not click next video twice', () => {
+    const h = harness(unit(1, '视频', '<div class="status-pie" style="--p:40"></div>') + unit(2));
+    const old = h.video({ended:true}); let firstClicks = 0, secondClicks = 0;
+    h.doc.getElementById('unit-item-1').onclick = () => firstClicks++;
+    h.doc.getElementById('unit-item-2').onclick = () => { secondClicks++; old.remove(); h.video({src:'https://example.com/2.mp4'}); };
+    h.start(); h.api.next(); h.advance(16000);
+    assert.equal(firstClicks, 1); assert.equal(secondClicks, 1);
+    h.doc.querySelector('#unit-item-1 .item-status').innerHTML = '<i class="is-finish"></i>';
+    h.advance(1000); assert.equal(h.api.index, 1); assert.equal(secondClicks, 1); h.close();
+});
+
+test('unchanged stale pie times out as unconfirmed instead of replaying', () => {
+    const h = harness(unit(1) + unit(2)); h.video({ended:true}); let clicks = 0;
+    h.doc.getElementById('unit-item-1').onclick = () => clicks++;
+    h.start(); h.api.next(); h.advance(31000);
+    assert.equal(clicks, 1); assert.equal(h.api.running, false);
+    assert.match(h.doc.querySelector('#gemini-status').textContent, /未观察到上一节饼图更新/); h.close();
+});
+
+test('updated partial progress allows bounded replay only after refresh wait', () => {
+    const h = harness(unit(1, '视频', '<div class="status-pie" style="--p:40"></div>') + unit(2)); h.video({ended:true}); let clicks=0;
+    h.doc.getElementById('unit-item-1').onclick = () => clicks++;
+    h.start(); h.api.next(); h.advance(5000);
+    h.doc.querySelector('.status-pie').style.setProperty('--p','80');
+    h.advance(24000); assert.equal(clicks, 1);
+    h.advance(1000); assert.equal(clicks, 2); assert.equal(h.api.running, true); h.close();
+});
+
+test('refresh clicks next unlocked video even if immediate next is locked', () => {
+    const h = harness(unit(1) + unit(2,'视频','<i class="iconfont">\ue660</i>') + unit(3)); h.video({ended:true});
+    let clicks=0; h.doc.getElementById('unit-item-3').onclick=()=>clicks++;
+    h.start(); h.api.next(); assert.equal(clicks,1); h.close();
+});
+
+test('last video clicks previous available video before inspecting completion', () => {
+    const h = harness(unit(1,'视频','<i class="is-finish"></i>') + unit(2)); h.video({ended:true}); let clicks=0;
+    h.doc.getElementById('unit-item-1').onclick=()=>clicks++;
+    h.start(); h.api.next(); assert.equal(clicks,1);
+    h.doc.querySelector('#unit-item-2 .item-status').innerHTML='<i class="is-finish"></i>';
+    h.advance(1000); assert.equal(h.api.running,false); h.close();
 });
 
 function xtPlayer(h, video) {
